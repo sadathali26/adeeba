@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>FPS Touch Interaction</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; user-select: none; font-family: 'Segoe UI', sans-serif; touch-action: none; }
+        
+        /* LOADING SCREEN */
+        #loader {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: #111; 
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            color: #fff; z-index: 999;
+        }
+        #progress-bar { width: 300px; height: 4px; background: #333; margin-top: 20px; border-radius: 2px; }
+        #progress-fill { width: 0%; height: 100%; background: #00ff88; transition: width 0.2s; border-radius: 2px; }
+
+        /* INTERACTION POPUP */
+        #interaction-popup {
+            position: absolute; top: 30%; left: 50%; transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.8); color: #00ff88; padding: 15px 30px;
+            border: 2px solid #00ff88; border-radius: 8px; font-size: 18px; font-weight: bold;
+            display: none; pointer-events: none; z-index: 100;
+            text-transform: uppercase; letter-spacing: 1px;
+            box-shadow: 0 0 15px rgba(0, 255, 136, 0.3);
+            animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        @keyframes popIn { from { transform: translateX(-50%) scale(0.5); opacity: 0; } to { transform: translateX(-50%) scale(1); opacity: 1; } }
+
+        /* CROSSHAIR (Desktop Only) */
+        #crosshair {
+            position: absolute; top: 50%; left: 50%; width: 6px; height: 6px;
+            background: rgba(255, 255, 255, 0.5); border-radius: 50%; 
+            transform: translate(-50%, -50%); pointer-events: none;
+            /* Hide on mobile to avoid confusion since mobile uses touch */
+            display: none; 
+        }
+        @media (hover: hover) { #crosshair { display: block; } }
+
+        /* ROTATE WARNING */
+        #rotate-warning {
+            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: #000; z-index: 9999;
+            flex-direction: column; justify-content: center; align-items: center; color: white;
+            text-align: center;
+        }
+        @media screen and (orientation: portrait) and (max-width: 900px) {
+            #rotate-warning { display: flex; }
+        }
+    </style>
+</head>
+<body>
+
+    <div id="rotate-warning">
+        <div style="font-size: 50px;">↻</div>
+        <h2>Please Rotate Your Device</h2>
+    </div>
+
+    <div id="loader">
+        <div id="loading-text">Downloading Assets... 0%</div>
+        <div id="progress-bar"><div id="progress-fill"></div></div>
+    </div>
+
+    <div id="crosshair"></div>
+    <div id="interaction-popup">Item Found!</div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+        import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
+        import { Octree } from 'three/addons/math/Octree.js';
+        import { Capsule } from 'three/addons/math/Capsule.js';
+
+        // --- 1. CONFIGURATION ---
+        const SPAWN_POINT = new THREE.Vector3(15.66, 1.5, -0.16); 
+        const PLAYER_HEIGHT = 0.9; 
+        const PLAYER_RADIUS = 0.35;
+        const PLAYER_SPEED = 12; 
+        const JUMP_FORCE = 6;
+        const GRAVITY = 20;
+
+        const BOB_FREQUENCY = 12;  
+        const BOB_AMPLITUDE = 0.01; 
+
+        // --- 2. SCENE SETUP ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x88ccee);
+        scene.fog = new THREE.Fog(0x88ccee, 0, 50);
+
+        const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.rotation.order = 'YXZ';
+
+        const ambientLight = new THREE.AmbientLight(0x6688cc);
+        scene.add(ambientLight);
+
+        const fillLight = new THREE.DirectionalLight(0xffffff, 1);
+        fillLight.position.set(-5, 25, -1);
+        fillLight.castShadow = true;
+        fillLight.shadow.bias = -0.001;
+        fillLight.shadow.mapSize.width = 1024;
+        fillLight.shadow.mapSize.height = 1024;
+        scene.add(fillLight);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.VSMShadowMap;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        document.body.appendChild(renderer.domElement);
+
+        // --- 3. PHYSICS SETUP ---
+        const worldOctree = new Octree();
+        const playerCollider = new Capsule(
+            new THREE.Vector3(0, 0.35, 0),
+            new THREE.Vector3(0, PLAYER_HEIGHT + 0.35, 0),
+            PLAYER_RADIUS
+        );
+
+        const playerVelocity = new THREE.Vector3();
+        const playerDirection = new THREE.Vector3();
+        let playerOnFloor = false;
+        let isGameReady = false;
+        let headBobTimer = 0;
+
+        // --- 4. CONTROLS ---
+        const keyStates = {};
+        
+        let moveTouchID = -1; // Left Side
+        let lookTouchID = -1; // Right Side
+        let lastTapTime = 0;
+        
+        let moveInput = { x: 0, y: 0 }; 
+        let moveOrigin = { x: 0, y: 0 }; 
+        let lookOrigin = { x: 0, y: 0 };
+
+        document.addEventListener('keydown', (event) => { keyStates[event.code] = true; });
+        document.addEventListener('keyup', (event) => { keyStates[event.code] = false; });
+
+        const loaderScreen = document.getElementById('loader');
+
+        // --- 5. INTERACTION LOGIC ---
+        const raycaster = new THREE.Raycaster();
+        const interactableObjects = []; // Stores Book, Radio, Typewriter
+        const popup = document.getElementById('interaction-popup');
+        let popupTimer = null;
+
+        function showPopup(text) {
+            popup.innerText = text;
+            popup.style.display = 'block';
+            clearTimeout(popupTimer);
+            popupTimer = setTimeout(() => {
+                popup.style.display = 'none';
+            }, 2000); // Hide after 2 seconds
+        }
+
+        // DESKTOP: Check Center Screen (Pointer based but invisible pointer)
+        function checkDesktopInteraction() {
+            raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+            const intersects = raycaster.intersectObjects(interactableObjects);
+            if (intersects.length > 0 && intersects[0].distance < 4) {
+                showPopup("Interacting with: " + intersects[0].object.name);
+            }
+        }
+
+        // MOBILE: Check Exact Touch Position
+        function checkMobileInteraction(touchX, touchY) {
+            // Convert screen pixel coordinates to -1 to +1 range
+            const mouse = new THREE.Vector2();
+            mouse.x = (touchX / window.innerWidth) * 2 - 1;
+            mouse.y = -(touchY / window.innerHeight) * 2 + 1;
+
+            raycaster.setFromCamera(mouse, camera);
+            // Slightly longer distance for mobile touch to feel responsive
+            const intersects = raycaster.intersectObjects(interactableObjects);
+
+            if (intersects.length > 0 && intersects[0].distance < 6) {
+                showPopup("Touched: " + intersects[0].object.name);
+                return true; // Return true to indicate we hit something
+            }
+            return false;
+        }
+
+        // --- DESKTOP MOUSE EVENTS ---
+        document.addEventListener('mousedown', () => { 
+            if (isGameReady) {
+                if (document.pointerLockElement !== document.body) {
+                    document.body.requestPointerLock(); 
+                } else {
+                    // If already locked, clicking means interacting
+                    checkDesktopInteraction();
+                }
+            }
+        });
+
+        document.body.addEventListener('mousemove', (event) => {
+            if (document.pointerLockElement === document.body) {
+                camera.rotation.y -= event.movementX / 500;
+                camera.rotation.x -= event.movementY / 500;
+                camera.rotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, camera.rotation.x));
+            }
+        });
+
+        // --- MOBILE TOUCH LOGIC (MODIFIED) ---
+        document.addEventListener('touchstart', (e) => {
+            if (!isGameReady) return;
+
+            for (let i = 0; i < e.changedTouches.length; i++) {
+                const touch = e.changedTouches[i];
+                
+                // 1. PRIORITY: Check if user tapped an object
+                const didInteract = checkMobileInteraction(touch.clientX, touch.clientY);
+
+                // If user touched an object, DO NOT treat it as a movement/look input
+                if (didInteract) continue; 
+
+                // 2. MOVEMENT LOGIC
+                const halfWidth = window.innerWidth / 2;
+
+                // Double Tap Jump (Right Side)
+                if (touch.clientX > halfWidth) {
+                    const currentTime = new Date().getTime();
+                    const tapLength = currentTime - lastTapTime;
+                    if (tapLength < 300 && tapLength > 0) {
+                        if (playerOnFloor) playerVelocity.y = JUMP_FORCE;
+                        // Prevent default preventing here might block scrolling if we weren't fullscreen
+                        // e.preventDefault(); 
+                    }
+                    lastTapTime = currentTime;
+                }
+
+                // Assign Zones
+                if (touch.clientX < halfWidth) { // LEFT (Move)
+                    if (moveTouchID === -1) {
+                        moveTouchID = touch.identifier;
+                        moveOrigin = { x: touch.clientX, y: touch.clientY };
+                        moveInput = { x: 0, y: 0 };
+                    }
+                } else { // RIGHT (Look)
+                    if (lookTouchID === -1) {
+                        lookTouchID = touch.identifier;
+                        lookOrigin = { x: touch.clientX, y: touch.clientY };
+                    }
+                }
+            }
+        }, {passive: false});
+
+        document.addEventListener('touchmove', (e) => {
+            if (!isGameReady) return;
+            e.preventDefault();
+
+            for (let i = 0; i < e.changedTouches.length; i++) {
+                const touch = e.changedTouches[i];
+
+                if (touch.identifier === moveTouchID) {
+                    const deltaX = touch.clientX - moveOrigin.x;
+                    const deltaY = touch.clientY - moveOrigin.y;
+                    const maxRadius = 50; 
+                    moveInput.x = Math.max(-1, Math.min(1, deltaX / maxRadius));
+                    moveInput.y = Math.max(-1, Math.min(1, -deltaY / maxRadius)); 
+                }
+
+                if (touch.identifier === lookTouchID) {
+                    const deltaX = touch.clientX - lookOrigin.x;
+                    const deltaY = touch.clientY - lookOrigin.y;
+                    const sensitivity = 0.005;
+
+                    camera.rotation.y -= deltaX * sensitivity;
+                    camera.rotation.x -= deltaY * sensitivity;
+                    camera.rotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, camera.rotation.x));
+
+                    lookOrigin.x = touch.clientX;
+                    lookOrigin.y = touch.clientY;
+                }
+            }
+        }, {passive: false});
+
+        document.addEventListener('touchend', (e) => {
+            for (let i = 0; i < e.changedTouches.length; i++) {
+                const touch = e.changedTouches[i];
+                if (touch.identifier === moveTouchID) {
+                    moveTouchID = -1;
+                    moveInput = { x: 0, y: 0 }; 
+                }
+                if (touch.identifier === lookTouchID) lookTouchID = -1;
+            }
+        });
+
+        // --- 6. LOAD MODEL ---
+        const loader = new GLTFLoader();
+
+        const dracoLoader = new DRACOLoader();
+        dracoLoader.setDecoderPath('https://unpkg.com/three@0.160.0/examples/jsm/libs/draco/');
+        loader.setDRACOLoader(dracoLoader);
+
+        const ktx2Loader = new KTX2Loader();
+        ktx2Loader.setTranscoderPath('https://unpkg.com/three@0.160.0/examples/jsm/libs/basis/');
+        ktx2Loader.detectSupport(renderer);
+        loader.setKTX2Loader(ktx2Loader);
+
+        loader.load('final_result.glb', 
+            (gltf) => {
+                const model = gltf.scene;
+                const ghostRequests = [];
+
+                model.traverse((child) => {
+                    if (child.isMesh) {
+                        const name = child.name.toLowerCase();
+
+                        // --- DETECT INTERACTABLES ---
+                        if (name.includes("book") || name.includes("radio") || name.includes("typewriter")) {
+                            interactableObjects.push(child);
+                        }
+
+                        const isTransparent = child.material.transparent === true || child.material.opacity < 1.0;
+                        const isTargetName = name.includes("corridor volume") || name.includes("object077") || name.includes("volume_ligiht") || name.includes("ray");
+
+                        if (isTargetName || isTransparent) {
+                            ghostRequests.push({ mesh: child, parent: child.parent });
+                        }
+                    }
+                });
+
+                ghostRequests.forEach(item => item.mesh.removeFromParent());
+                
+                document.getElementById('loading-text').innerText = "Optimizing Physics...";
+                setTimeout(() => {
+                    worldOctree.fromGraphNode(model);
+                    ghostRequests.forEach(item => { if (item.parent) item.parent.add(item.mesh); });
+
+                    model.traverse(child => {
+                        if (child.isMesh) { child.castShadow = true; child.receiveShadow = true; }
+                    });
+
+                    scene.add(model);
+                    playerCollider.start.copy(SPAWN_POINT);
+                    playerCollider.end.copy(SPAWN_POINT).add(new THREE.Vector3(0, PLAYER_HEIGHT, 0));
+
+                    if (gltf.animations.length > 0) {
+                        const mixer = new THREE.AnimationMixer(model);
+                        gltf.animations.forEach((clip) => mixer.clipAction(clip).play());
+                        scene.userData.mixer = mixer;
+                    }
+
+                    loaderScreen.style.display = 'none';
+                    isGameReady = true;
+                }, 100);
+            },
+            (xhr) => {
+                const percent = Math.round((xhr.loaded / xhr.total) * 100);
+                document.getElementById('loading-text').innerText = `Downloading Assets... ${percent}%`;
+                document.getElementById('progress-fill').style.width = `${percent}%`;
+            },
+            (error) => { console.error('An error occurred:', error); }
+        );
+
+        // --- 7. PHYSICS & LOGIC ---
+        function playerCollisions() {
+            const result = worldOctree.capsuleIntersect(playerCollider);
+            playerOnFloor = false;
+            if (result) {
+                playerOnFloor = result.normal.y > 0;
+                if (!playerOnFloor) {
+                    playerVelocity.addScaledVector(result.normal, - result.normal.dot(playerVelocity));
+                }
+                playerCollider.translate(result.normal.multiplyScalar(result.depth));
+            }
+        }
+
+        function updatePlayer(deltaTime) {
+            let damping = Math.exp(- 4 * deltaTime) - 1;
+            if (!playerOnFloor) {
+                playerVelocity.y -= GRAVITY * deltaTime;
+                damping *= 0.1;
+            }
+            playerVelocity.addScaledVector(playerVelocity, damping);
+            const deltaPosition = playerVelocity.clone().multiplyScalar(deltaTime);
+            playerCollider.translate(deltaPosition);
+            playerCollisions();
+
+            // Head Bob
+            const speed = Math.sqrt(playerVelocity.x * playerVelocity.x + playerVelocity.z * playerVelocity.z);
+            if (playerOnFloor && speed > 0.1) {
+                headBobTimer += deltaTime * BOB_FREQUENCY;
+            } else {
+                headBobTimer = 0;
+            }
+            camera.position.copy(playerCollider.end);
+            camera.position.y += Math.sin(headBobTimer) * BOB_AMPLITUDE;
+        }
+
+        function getForwardVector() {
+            camera.getWorldDirection(playerDirection);
+            playerDirection.y = 0;
+            playerDirection.normalize();
+            return playerDirection;
+        }
+
+        function getSideVector() {
+            camera.getWorldDirection(playerDirection);
+            playerDirection.y = 0;
+            playerDirection.normalize();
+            playerDirection.cross(camera.up);
+            return playerDirection;
+        }
+
+        function controls(deltaTime) {
+            const maxSpeedDelta = deltaTime * (playerOnFloor ? PLAYER_SPEED : 8);
+
+            // PC Keyboard
+            if (keyStates['KeyW']) playerVelocity.add(getForwardVector().multiplyScalar(maxSpeedDelta));
+            if (keyStates['KeyS']) playerVelocity.add(getForwardVector().multiplyScalar(-maxSpeedDelta));
+            if (keyStates['KeyA']) playerVelocity.add(getSideVector().multiplyScalar(-maxSpeedDelta));
+            if (keyStates['KeyD']) playerVelocity.add(getSideVector().multiplyScalar(maxSpeedDelta));
+            if (playerOnFloor && keyStates['Space']) playerVelocity.y = JUMP_FORCE;
+
+            // Mobile Joystick
+            if (moveInput.y !== 0 || moveInput.x !== 0) {
+                playerVelocity.add(getForwardVector().multiplyScalar(maxSpeedDelta * moveInput.y));
+                playerVelocity.add(getSideVector().multiplyScalar(maxSpeedDelta * moveInput.x));
+            }
+        }
+
+        // --- 8. ANIMATION LOOP ---
+        const clock = new THREE.Clock();
+        const STEPS_PER_FRAME = 5;
+
+        function animate() {
+            const deltaTime = Math.min(0.05, clock.getDelta()) / STEPS_PER_FRAME;
+            
+            if (isGameReady) {
+                for (let i = 0; i < STEPS_PER_FRAME; i++) {
+                    controls(deltaTime);
+                    updatePlayer(deltaTime);
+                }
+                if (scene.userData.mixer) scene.userData.mixer.update(deltaTime * STEPS_PER_FRAME);
+            }
+
+            renderer.render(scene, camera);
+            requestAnimationFrame(animate);
+        }
+
+        animate();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
