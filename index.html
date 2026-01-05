@@ -2,10 +2,13 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>FPS Touch Interaction</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#000000">
+    <title>FPS Fullscreen</title>
     <style>
-        body { margin: 0; overflow: hidden; background-color: #000; user-select: none; font-family: 'Segoe UI', sans-serif; touch-action: none; }
+        /* 100dvh helps handle the mobile URL bar popping up/down */
+        body { margin: 0; overflow: hidden; background-color: #000; user-select: none; font-family: 'Segoe UI', sans-serif; touch-action: none; height: 100dvh; width: 100vw; }
         
         /* LOADING SCREEN */
         #loader {
@@ -16,6 +19,22 @@
         }
         #progress-bar { width: 300px; height: 4px; background: #333; margin-top: 20px; border-radius: 2px; }
         #progress-fill { width: 0%; height: 100%; background: #00ff88; transition: width 0.2s; border-radius: 2px; }
+
+        /* START BUTTON (Triggers Fullscreen) */
+        #start-screen {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.7);
+            display: none; /* Hidden until loaded */
+            flex-direction: column; justify-content: center; align-items: center;
+            z-index: 100; backdrop-filter: blur(5px);
+        }
+        #start-btn {
+            padding: 15px 40px; font-size: 24px; font-weight: bold;
+            color: #000; background: #00ff88; border: none; border-radius: 30px;
+            cursor: pointer; box-shadow: 0 0 20px rgba(0, 255, 136, 0.5);
+            text-transform: uppercase; animation: pulse 2s infinite;
+        }
+        @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.05); } 100% { transform: scale(1); } }
 
         /* INTERACTION POPUP */
         #interaction-popup {
@@ -34,7 +53,6 @@
             position: absolute; top: 50%; left: 50%; width: 6px; height: 6px;
             background: rgba(255, 255, 255, 0.5); border-radius: 50%; 
             transform: translate(-50%, -50%); pointer-events: none;
-            /* Hide on mobile to avoid confusion since mobile uses touch */
             display: none; 
         }
         @media (hover: hover) { #crosshair { display: block; } }
@@ -61,6 +79,11 @@
     <div id="loader">
         <div id="loading-text">Downloading Assets... 0%</div>
         <div id="progress-bar"><div id="progress-fill"></div></div>
+        <div id="error-msg" style="color: red; margin-top: 10px; font-size: 14px;"></div>
+    </div>
+
+    <div id="start-screen">
+        <button id="start-btn">Tap to Start</button>
     </div>
 
     <div id="crosshair"></div>
@@ -90,7 +113,6 @@
         const PLAYER_SPEED = 12; 
         const JUMP_FORCE = 6;
         const GRAVITY = 20;
-
         const BOB_FREQUENCY = 12;  
         const BOB_AMPLITUDE = 0.01; 
 
@@ -137,11 +159,9 @@
 
         // --- 4. CONTROLS ---
         const keyStates = {};
-        
-        let moveTouchID = -1; // Left Side
-        let lookTouchID = -1; // Right Side
+        let moveTouchID = -1; 
+        let lookTouchID = -1; 
         let lastTapTime = 0;
-        
         let moveInput = { x: 0, y: 0 }; 
         let moveOrigin = { x: 0, y: 0 }; 
         let lookOrigin = { x: 0, y: 0 };
@@ -150,10 +170,30 @@
         document.addEventListener('keyup', (event) => { keyStates[event.code] = false; });
 
         const loaderScreen = document.getElementById('loader');
+        const startScreen = document.getElementById('start-screen');
+        const startBtn = document.getElementById('start-btn');
+
+        // --- FULLSCREEN START LOGIC ---
+        startBtn.addEventListener('click', () => {
+            // 1. Try to go fullscreen
+            try {
+                document.documentElement.requestFullscreen().catch((e) => {
+                    console.log("Fullscreen denied (usually harmless on iOS):", e);
+                });
+            } catch(e) {}
+
+            // 2. Hide Start Screen
+            startScreen.style.display = 'none';
+            
+            // 3. Lock pointer on Desktop
+            if (!('ontouchstart' in window)) {
+                document.body.requestPointerLock();
+            }
+        });
 
         // --- 5. INTERACTION LOGIC ---
         const raycaster = new THREE.Raycaster();
-        const interactableObjects = []; // Stores Book, Radio, Typewriter
+        const interactableObjects = []; 
         const popup = document.getElementById('interaction-popup');
         let popupTimer = null;
 
@@ -161,12 +201,9 @@
             popup.innerText = text;
             popup.style.display = 'block';
             clearTimeout(popupTimer);
-            popupTimer = setTimeout(() => {
-                popup.style.display = 'none';
-            }, 2000); // Hide after 2 seconds
+            popupTimer = setTimeout(() => { popup.style.display = 'none'; }, 2000);
         }
 
-        // DESKTOP: Check Center Screen (Pointer based but invisible pointer)
         function checkDesktopInteraction() {
             raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
             const intersects = raycaster.intersectObjects(interactableObjects);
@@ -175,31 +212,28 @@
             }
         }
 
-        // MOBILE: Check Exact Touch Position
         function checkMobileInteraction(touchX, touchY) {
-            // Convert screen pixel coordinates to -1 to +1 range
             const mouse = new THREE.Vector2();
             mouse.x = (touchX / window.innerWidth) * 2 - 1;
             mouse.y = -(touchY / window.innerHeight) * 2 + 1;
 
             raycaster.setFromCamera(mouse, camera);
-            // Slightly longer distance for mobile touch to feel responsive
             const intersects = raycaster.intersectObjects(interactableObjects);
 
             if (intersects.length > 0 && intersects[0].distance < 6) {
                 showPopup("Touched: " + intersects[0].object.name);
-                return true; // Return true to indicate we hit something
+                return true; 
             }
             return false;
         }
 
         // --- DESKTOP MOUSE EVENTS ---
         document.addEventListener('mousedown', () => { 
-            if (isGameReady) {
+            // Only lock if start screen is GONE
+            if (isGameReady && startScreen.style.display === 'none') {
                 if (document.pointerLockElement !== document.body) {
                     document.body.requestPointerLock(); 
                 } else {
-                    // If already locked, clicking means interacting
                     checkDesktopInteraction();
                 }
             }
@@ -213,42 +247,32 @@
             }
         });
 
-        // --- MOBILE TOUCH LOGIC (MODIFIED) ---
+        // --- MOBILE TOUCH LOGIC ---
         document.addEventListener('touchstart', (e) => {
-            if (!isGameReady) return;
+            if (!isGameReady || startScreen.style.display !== 'none') return;
 
             for (let i = 0; i < e.changedTouches.length; i++) {
                 const touch = e.changedTouches[i];
-                
-                // 1. PRIORITY: Check if user tapped an object
                 const didInteract = checkMobileInteraction(touch.clientX, touch.clientY);
-
-                // If user touched an object, DO NOT treat it as a movement/look input
                 if (didInteract) continue; 
 
-                // 2. MOVEMENT LOGIC
                 const halfWidth = window.innerWidth / 2;
 
-                // Double Tap Jump (Right Side)
                 if (touch.clientX > halfWidth) {
                     const currentTime = new Date().getTime();
-                    const tapLength = currentTime - lastTapTime;
-                    if (tapLength < 300 && tapLength > 0) {
+                    if (currentTime - lastTapTime < 300) {
                         if (playerOnFloor) playerVelocity.y = JUMP_FORCE;
-                        // Prevent default preventing here might block scrolling if we weren't fullscreen
-                        // e.preventDefault(); 
                     }
                     lastTapTime = currentTime;
                 }
 
-                // Assign Zones
-                if (touch.clientX < halfWidth) { // LEFT (Move)
+                if (touch.clientX < halfWidth) { 
                     if (moveTouchID === -1) {
                         moveTouchID = touch.identifier;
                         moveOrigin = { x: touch.clientX, y: touch.clientY };
                         moveInput = { x: 0, y: 0 };
                     }
-                } else { // RIGHT (Look)
+                } else { 
                     if (lookTouchID === -1) {
                         lookTouchID = touch.identifier;
                         lookOrigin = { x: touch.clientX, y: touch.clientY };
@@ -258,12 +282,11 @@
         }, {passive: false});
 
         document.addEventListener('touchmove', (e) => {
-            if (!isGameReady) return;
+            if (!isGameReady || startScreen.style.display !== 'none') return;
             e.preventDefault();
 
             for (let i = 0; i < e.changedTouches.length; i++) {
                 const touch = e.changedTouches[i];
-
                 if (touch.identifier === moveTouchID) {
                     const deltaX = touch.clientX - moveOrigin.x;
                     const deltaY = touch.clientY - moveOrigin.y;
@@ -271,16 +294,13 @@
                     moveInput.x = Math.max(-1, Math.min(1, deltaX / maxRadius));
                     moveInput.y = Math.max(-1, Math.min(1, -deltaY / maxRadius)); 
                 }
-
                 if (touch.identifier === lookTouchID) {
                     const deltaX = touch.clientX - lookOrigin.x;
                     const deltaY = touch.clientY - lookOrigin.y;
                     const sensitivity = 0.005;
-
                     camera.rotation.y -= deltaX * sensitivity;
                     camera.rotation.x -= deltaY * sensitivity;
                     camera.rotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, camera.rotation.x));
-
                     lookOrigin.x = touch.clientX;
                     lookOrigin.y = touch.clientY;
                 }
@@ -318,12 +338,9 @@
                 model.traverse((child) => {
                     if (child.isMesh) {
                         const name = child.name.toLowerCase();
-
-                        // --- DETECT INTERACTABLES ---
                         if (name.includes("book") || name.includes("radio") || name.includes("typewriter")) {
                             interactableObjects.push(child);
                         }
-
                         const isTransparent = child.material.transparent === true || child.material.opacity < 1.0;
                         const isTargetName = name.includes("corridor volume") || name.includes("object077") || name.includes("volume_ligiht") || name.includes("ray");
 
@@ -339,7 +356,6 @@
                 setTimeout(() => {
                     worldOctree.fromGraphNode(model);
                     ghostRequests.forEach(item => { if (item.parent) item.parent.add(item.mesh); });
-
                     model.traverse(child => {
                         if (child.isMesh) { child.castShadow = true; child.receiveShadow = true; }
                     });
@@ -354,7 +370,9 @@
                         scene.userData.mixer = mixer;
                     }
 
+                    // HIDE LOADER -> SHOW START SCREEN
                     loaderScreen.style.display = 'none';
+                    startScreen.style.display = 'flex'; // Show button now
                     isGameReady = true;
                 }, 100);
             },
@@ -363,7 +381,11 @@
                 document.getElementById('loading-text').innerText = `Downloading Assets... ${percent}%`;
                 document.getElementById('progress-fill').style.width = `${percent}%`;
             },
-            (error) => { console.error('An error occurred:', error); }
+            (error) => { 
+                console.error('An error occurred:', error); 
+                document.getElementById('loading-text').innerText = "ERROR LOADING MODEL";
+                document.getElementById('error-msg').innerText = "Check file name/path.";
+            }
         );
 
         // --- 7. PHYSICS & LOGIC ---
@@ -390,7 +412,6 @@
             playerCollider.translate(deltaPosition);
             playerCollisions();
 
-            // Head Bob
             const speed = Math.sqrt(playerVelocity.x * playerVelocity.x + playerVelocity.z * playerVelocity.z);
             if (playerOnFloor && speed > 0.1) {
                 headBobTimer += deltaTime * BOB_FREQUENCY;
@@ -419,14 +440,12 @@
         function controls(deltaTime) {
             const maxSpeedDelta = deltaTime * (playerOnFloor ? PLAYER_SPEED : 8);
 
-            // PC Keyboard
             if (keyStates['KeyW']) playerVelocity.add(getForwardVector().multiplyScalar(maxSpeedDelta));
             if (keyStates['KeyS']) playerVelocity.add(getForwardVector().multiplyScalar(-maxSpeedDelta));
             if (keyStates['KeyA']) playerVelocity.add(getSideVector().multiplyScalar(-maxSpeedDelta));
             if (keyStates['KeyD']) playerVelocity.add(getSideVector().multiplyScalar(maxSpeedDelta));
             if (playerOnFloor && keyStates['Space']) playerVelocity.y = JUMP_FORCE;
 
-            // Mobile Joystick
             if (moveInput.y !== 0 || moveInput.x !== 0) {
                 playerVelocity.add(getForwardVector().multiplyScalar(maxSpeedDelta * moveInput.y));
                 playerVelocity.add(getSideVector().multiplyScalar(maxSpeedDelta * moveInput.x));
@@ -440,7 +459,7 @@
         function animate() {
             const deltaTime = Math.min(0.05, clock.getDelta()) / STEPS_PER_FRAME;
             
-            if (isGameReady) {
+            if (isGameReady && startScreen.style.display === 'none') {
                 for (let i = 0; i < STEPS_PER_FRAME; i++) {
                     controls(deltaTime);
                     updatePlayer(deltaTime);
