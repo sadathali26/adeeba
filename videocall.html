@@ -3,35 +3,85 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>My Video Call App</title>
+    <title>Live Interview Room</title>
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet" />
     <style>
         body {
-            margin: 0;
-            padding: 0;
-            font-family: Arial, sans-serif;
-            background-color: #121212;
-            color: white;
             display: flex;
-            flex-direction: column;
+            flex-direction: column; 
+            min-height: 100vh;
+            margin: 0;
             align-items: center;
-            height: 100vh;
+            justify-content: center;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #f4ece4, #f1eadd, #f8f4e8, #faf2e9, #f5eedf);
+            background-attachment: fixed;
+            transition: background 0.8s ease, color 0.3s ease;
+            color: #ffffff; 
+            padding: 20px;
         }
+
+        body.dark {
+            background: linear-gradient(135deg, #1f121f, #1c1620, #161221, #1a111d, #180e0f);
+            color: #ffffff; 
+        }
+
         #header {
             padding: 20px;
             text-align: center;
+            color: #212529; /* Dark text for light mode */
+            transition: color 0.3s ease;
         }
-        /* This is where the video call UI will be injected */
+
+        body.dark #header {
+            color: #ffffff; /* Light text for dark mode */
+        }
+
         #video-container {
             width: 100vw;
             height: 85vh;
         }
+
+        .floating-btn {
+            position: fixed;
+            top: 20px;
+            z-index: 1000;
+            background: transparent;
+            border: none;
+            box-shadow: none;
+            color: #212529;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: transform 0.3s ease, color 0.3s ease;
+            padding: 10px;
+        }
+
+        .floating-btn .material-symbols-outlined {
+            font-size: 32px; 
+        }
+
+        .floating-btn:hover {
+            transform: scale(1.15);
+        }
+
+        .back-btn { left: 20px; }
+        .toggle-btn { right: 20px; }
+
+        body.dark .floating-btn { color: #ffffff; }
     </style>
 </head>
-<body>
+<body class="dark"> <button class="floating-btn back-btn" onclick="goBack()" title="Leave Meeting">
+        <span class="material-symbols-outlined">logout</span>
+    </button>
+
+    <button class="floating-btn toggle-btn" onclick="toggleDarkMode()" title="Toggle Theme">
+        <span class="material-symbols-outlined" id="theme-icon">wb_sunny</span>
+    </button>
 
     <div id="header">
-        <h2>Live Video Room</h2>
-        <p>Share the URL in your browser with a friend to test the call.</p>
+        <h2>Live Interview Room</h2>
     </div>
 
     <div id="video-container"></div>
@@ -40,21 +90,27 @@
 
     <script>
         window.onload = function () {
-            // 1. Extract Room ID from URL, or generate a random one if it doesn't exist
+            // 1. Get real user details from localStorage
+            const storedUserId = localStorage.getItem("userId");
+            const storedUserName = localStorage.getItem("userName");
+
+            // If they aren't logged in, redirect them away (or assign a guest name)
+            const userID = storedUserId ? storedUserId : (Math.floor(Math.random() * 10000) + "");
+            const userName = storedUserName ? storedUserName : "Guest_" + userID;
+
+            // 2. Extract Room ID from URL
             function getUrlParams(url) {
                 let urlStr = url.split('?')[1] || '';
                 return Object.fromEntries(new URLSearchParams(urlStr).entries());
             }
             
             const roomID = getUrlParams(window.location.href)['roomID'] || (Math.floor(Math.random() * 10000) + "");
-            const userID = Math.floor(Math.random() * 10000) + "";
-            const userName = "User_" + userID;
 
-            // 2. Your Project Credentials
+            // 3. ZegoCloud Credentials
             const appID = 767996820; 
             const serverSecret = "051753ef4d52dca77aa2f9bf2e0fec5c";
 
-            // 3. Generate the Kit Token for testing
+            // 4. Generate Token
             const kitToken = ZegoUIKitPrebuilt.generateKitTokenForTest(
                 appID, 
                 serverSecret, 
@@ -63,30 +119,46 @@
                 userName
             );
 
-            // 4. Initialize and join the room
+            // 5. Initialize Call
             const zp = ZegoUIKitPrebuilt.create(kitToken);
             
             zp.joinRoom({
                 container: document.querySelector("#video-container"),
                 sharedLinks: [{
-                    name: 'Shareable Link',
+                    name: 'Meeting Link',
                     url: window.location.protocol + '//' + window.location.host + window.location.pathname + '?roomID=' + roomID,
                 }],
                 scenario: {
-                    mode: ZegoUIKitPrebuilt.VideoConference, // Best for standard video calls
+                    mode: ZegoUIKitPrebuilt.VideoConference, 
                 },
-                turnOnMicrophoneWhenJoining: false, // Start muted for testing
-                turnOnCameraWhenJoining: false,     // Start with camera off for testing
+                turnOnMicrophoneWhenJoining: false, 
+                turnOnCameraWhenJoining: false,     
                 showMyCameraToggleButton: true,
                 showMyMicrophoneToggleButton: true,
                 showAudioVideoSettingsButton: true,
                 showScreenSharingButton: true,
                 showTextChat: true,
                 showUserList: true,
-                maxUsers: 5,
+                maxUsers: 2, // Perfect for 1-on-1 interviews
                 layout: "Auto",
             });
         };
+
+        // Theme Toggle
+        function toggleDarkMode() {
+            document.body.classList.toggle('dark');
+            const themeIcon = document.getElementById('theme-icon');
+            if (document.body.classList.contains('dark')) {
+                themeIcon.textContent = 'wb_sunny'; 
+            } else {
+                themeIcon.textContent = 'dark_mode'; 
+            }
+        }
+
+        // Leave meeting and go back to directory
+        function goBack() {
+            window.location.href = 'in-meet.html';
+        }
     </script>
 </body>
 </html>
