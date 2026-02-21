@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My Video Call App</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+            background-color: #121212;
+            color: white;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            height: 100vh;
+        }
+        #header {
+            padding: 20px;
+            text-align: center;
+        }
+        /* This is where the video call UI will be injected */
+        #video-container {
+            width: 100vw;
+            height: 85vh;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="header">
+        <h2>Live Video Room</h2>
+        <p>Share the URL in your browser with a friend to test the call.</p>
+    </div>
+
+    <div id="video-container"></div>
+
+    <script src="https://unpkg.com/@zegocloud/zego-uikit-prebuilt/zego-uikit-prebuilt.js"></script>
+
+    <script>
+        window.onload = function () {
+            // 1. Extract Room ID from URL, or generate a random one if it doesn't exist
+            function getUrlParams(url) {
+                let urlStr = url.split('?')[1] || '';
+                return Object.fromEntries(new URLSearchParams(urlStr).entries());
+            }
+            
+            const roomID = getUrlParams(window.location.href)['roomID'] || (Math.floor(Math.random() * 10000) + "");
+            const userID = Math.floor(Math.random() * 10000) + "";
+            const userName = "User_" + userID;
+
+            // 2. Your Project Credentials
+            const appID = 767996820; 
+            const serverSecret = "051753ef4d52dca77aa2f9bf2e0fec5c";
+
+            // 3. Generate the Kit Token for testing
+            const kitToken = ZegoUIKitPrebuilt.generateKitTokenForTest(
+                appID, 
+                serverSecret, 
+                roomID, 
+                userID, 
+                userName
+            );
+
+            // 4. Initialize and join the room
+            const zp = ZegoUIKitPrebuilt.create(kitToken);
+            
+            zp.joinRoom({
+                container: document.querySelector("#video-container"),
+                sharedLinks: [{
+                    name: 'Shareable Link',
+                    url: window.location.protocol + '//' + window.location.host + window.location.pathname + '?roomID=' + roomID,
+                }],
+                scenario: {
+                    mode: ZegoUIKitPrebuilt.VideoConference, // Best for standard video calls
+                },
+                turnOnMicrophoneWhenJoining: false, // Start muted for testing
+                turnOnCameraWhenJoining: false,     // Start with camera off for testing
+                showMyCameraToggleButton: true,
+                showMyMicrophoneToggleButton: true,
+                showAudioVideoSettingsButton: true,
+                showScreenSharingButton: true,
+                showTextChat: true,
+                showUserList: true,
+                maxUsers: 5,
+                layout: "Auto",
+            });
+        };
+    </script>
+</body>
+</html>
